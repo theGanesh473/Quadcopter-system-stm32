@@ -1,0 +1,93 @@
+#include <Arduino.h>
+#include <Servo.h>
+
+#define NUM_MOTORS 4
+#define PPR 20
+#define LOOP_HZ 100
+#define PWM_MIN 1000
+#define PWM_MAX 2000
+#define PWM_BASE 1150
+
+float KP = 0.6;
+float KI = 0.1;
+
+const uint8_t encPins[NUM_MOTORS] = {PA0, PA1, PA2, PA3};
+const uint8_t pwmPins[NUM_MOTORS] = {PB6, PB7, PB8, PB9};
+
+volatile uint32_t pulseCount[NUM_MOTORS] = {0};
+
+float rpm[NUM_MOTORS] = {0};
+float pwmOut[NUM_MOTORS] = {PWM_BASE, PWM_BASE, PWM_BASE, PWM_BASE};
+float integral[NUM_MOTORS] = {0};
+
+Servo esc[NUM_MOTORS];
+HardwareTimer *timer = new HardwareTimer(TIM4);
+
+// Interrupts
+void enc0() { pulseCount[0]++; }
+void enc1() { pulseCount[1]++; }
+void enc2() { pulseCount[2]++; }
+void enc3() { pulseCount[3]++; }
+
+void controlLoop() {
+
+  for (int i = 0; i < 4; i++) {
+    rpm[i] = pulseCount[i] * (60.0 * LOOP_HZ / PPR);
+    pulseCount[i] = 0;
+  }
+
+  float avg = 0;
+  for (int i = 0; i < 4; i++) avg += rpm[i];
+  avg /= 4;
+
+  for (int i = 0; i < 4; i++) {
+    float error = avg - rpm[i];
+
+    integral[i] += error * (1.0 / LOOP_HZ);
+
+    if (integral[i] > 200) integral[i] = 200;
+    if (integral[i] < -200) integral[i] = -200;
+
+    float output = KP * error + KI * integral[i];
+
+    pwmOut[i] += output;
+
+    if (pwmOut[i] > PWM_MAX) pwmOut[i] = PWM_MAX;
+    if (pwmOut[i] < PWM_MIN) pwmOut[i] = PWM_MIN;
+
+    esc[i].writeMicroseconds((int)pwmOut[i]);
+  }
+
+  for (int i = 0; i < 4; i++) {
+    Serial.print(rpm[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  for (int i = 0; i < 4; i++) {
+    esc[i].attach(pwmPins[i], PWM_MIN, PWM_MAX);
+    esc[i].writeMicroseconds(PWM_MIN);
+  }
+
+  delay(3000);
+
+  for (int i = 0; i < 4; i++) {
+    pinMode(encPins[i], INPUT);
+  }
+
+  attachInterrupt(digitalPinToInterrupt(encPins[0]), enc0, RISING);
+  attachInterrupt(digitalPinToInterrupt(encPins[1]), enc1, RISING);
+  attachInterrupt(digitalPinToInterrupt(encPins[2]), enc2, RISING);
+  attachInterrupt(digitalPinToInterrupt(encPins[3]), enc3, RISING);
+
+  timer->setOverflow(LOOP_HZ, HERTZ_FORMAT);
+  timer->attachInterrupt(controlLoop);
+  timer->resume();
+}
+
+void loop() {}
